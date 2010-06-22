@@ -1,0 +1,232 @@
+#!/usr/bin/ruby -w
+# This script should retrieve the fstab from a server via nrpe.
+# Then it creates a check_multi configfile for those disks
+#
+# Usage:
+#		-h this help
+#		-H Host
+#		-w default warning level in percent
+#		-c default warning level in percent
+#
+
+require "pp"
+require "getoptlong"
+require "rdoc/usage"
+require "logger"
+require "ipaddr"
+require "yaml"
+require "fileutils"
+
+# initialize logging engine
+$log = Logger.new(STDOUT)
+
+################################## Configuration  ##################################
+#/usr/lib/nagios/plugins/check_nrpe -H localhost -c check_generic -a check_fstab
+$plugin_path = "/usr/lib/nagios/plugins"
+$config_path = "/var/local/check_fstab/config"
+$cache_path = "/var/local/check_fstab/cache"
+# polling intervall in seconds
+$polling_intervall = 5
+
+$warning = "10%"
+$critical = "5%"
+
+##################################  dont touch this  ##################################
+$status = 0
+$log.level = Logger::DEBUG
+$output = "ERROR: Unexplained errors happen all the time."
+
+
+##################################  Classes - no need to touch them  ##################################
+
+class Disks
+		def initialize(ip)
+				# TODO fix error handling
+				@host = ip if IPAddr.new(ip).ipv4? rescue "Error in IP Address"
+				@olddisks = nil
+
+				# go into main loop
+				intelligence
+		end
+
+		def intelligence
+				unless read_disk_cache
+						$log.debug "yikes. something went wrong while reading cache file. get fresh data."
+						retrieve_data_from_host
+				end
+
+				# skip if we have manual changes
+				if @disks[0][:changes] == false
+					# is data current?
+					difference = Time.now - @disks[1][:seen]
+					$log.debug "Last retrieval of disks: #{difference}"
+					if difference >= $polling_intervall
+							$log.info "ohnoes. Data is more than #{$polling_intervall} seconds old. Retrieving update."
+							retrieve_data_from_host
+					end
+				end
+				# ok by now we should have @disks initialized. just to be sure.
+				error "Sumthing happened while initializing @disks. Plz check." unless @disks
+
+				# did we have changes?
+				# if we had changes we must recreate the check_multi config
+				if check_for_changes
+						create_multi_config
+				end
+
+				# call check_multi
+				$output = call_check_multi				
+		end
+
+		# Calls NRPE and fills @disks with teh list of mounted disks
+		def retrieve_data_from_host
+				data = `#{$plugin_path}/check_nrpe -H #{@host} -c check_fstab`
+				$log.debug "check_nrpe output: #{data.chomp}"
+
+				# Error handling
+				if data =~ /Command.*not defined/i
+						 error "Error: #{data}"
+				end
+
+				tmpdisks = [{:changes => false}]
+				disks = data.chomp.split("|").map! {|x| x.strip }
+				disks.each do |disk|
+						tmpdisks << { 
+								:disk => disk,
+								:warn => nil,
+								:crit => nil,
+								:seen => Time.now()
+						}
+				end
+				if @disks
+						$log.info "updating disk cache with new data"
+						update_disks(tmpdisks)
+				elsif
+						$log.info "Had no @disks defined. writing new default file"
+						@disks = tmpdisks
+				end
+				write_disk_cache
+				create_multi_config
+		end
+
+		# writes the disk cache file
+		def write_disk_cache
+				if File.exists?("#{$cache_path}/#{@host}_disks.yaml")
+						$log.info "Doing backup of cachefile to #{@host}_disks.yaml"
+						FileUtils.mv("#{$cache_path}/#{@host}_disks.yaml","#{$cache_path}/#{@host}_disks_backup.yaml")
+						@olddisks = YAML::load(File.read("#{$cache_path}/#{@host}_disks_backup.yaml"))
+				end
+				File.open( "#{$cache_path}/#{@host}_disks.yaml", 'w' ) do |out|
+						YAML.dump(@disks,out)
+				end
+				$log.info "Disk cache written for #{@host}"
+		end
+
+		# reads the disk cache file
+		def read_disk_cache
+				if File.exists?("#{$cache_path}/#{@host}_disks.yaml")
+						@disks = YAML::load(File.read("#{$cache_path}/#{@host}_disks.yaml"))
+						$log.info "Loaded cachefile for #{@host}."
+				else
+						$log.warn "No cachefile found. Need to get a new one."
+						return false
+				end
+		end
+
+		# Creates a check_multi compatible configfile
+		def create_multi_config
+				File.open( "#{$config_path}/#{@host}_disks.cfg", 'w' ) do |out|
+						out.puts "# Diskfile for host #{@host} generated at #{Time.now}"
+						@disks.each do |disk|
+								next unless disk[:disk]
+								disk[:warn] = "$WARN$" if disk[:warn].nil?
+								disk[:crit] = "$CRIT$" if disk[:crit].nil?
+								out.puts "command[#{disk[:disk].tr("/","_")}::check_disk]=check_nrpe -H #{@host} -c check_disk -a #{disk[:warn]} #{disk[:crit]} #{disk[:disk]}"
+						end
+				end
+				$log.info "check_multi config written for host #{@host}"
+		end
+
+		# executes check_multi for the given host
+		def call_check_multi
+				data = `#{$plugin_path}/check_multi -s libexec=#{$plugin_path} -s WARN=#{$warning} -s CRIT=#{$critical} -t 20 -f #{$config_path}/#{@host}_disks.cfg`
+				$status = $?
+				return data
+		end
+
+		# does the data differ from what we already know?
+		def check_for_changes
+			# Check on disk changes
+			unless @disks[0][:changes] == false
+					$log.info "Cachefile changed by user. Honoring changes."
+					@disks[0][:changes] = false
+					write_disk_cache
+					return true
+			end
+			return false
+		end
+
+		def update_disks(disks)
+			unless @disks.nil?
+				@disks.each do |olddisk|
+						found = false
+						disks.each_with_index do |disk,i|
+								next unless disk[:disk] == olddisk[:disk]
+								disk[:warn] = olddisk[:warn]
+								disk[:crit] = olddisk[:crit]
+								found = true
+								break
+						end
+						next if found == true
+						# hmm. disk has vanished. add it to new array.
+						disks << olddisk
+				end
+
+			end
+			@disks = disks
+		end
+
+		def error(message)
+				$log.error "#{message}"
+				exit 1;
+		end
+end
+
+################################# Main Program  ##################################
+
+# parse options
+opts = GetoptLong.new(
+        ["--host", "-H", GetoptLong::REQUIRED_ARGUMENT],
+        ["--warning", "-w", GetoptLong::OPTIONAL_ARGUMENT],
+        ["--critical", "-c", GetoptLong::OPTIONAL_ARGUMENT],
+        ["--help", "-h", GetoptLong::NO_ARGUMENT ]
+)
+
+host = "unknown"
+
+opts.each do |opt,arg|
+        case opt
+                when "--host"
+                        host = arg
+				when "--warning"
+						$warning = arg
+				when "--critical"
+						$critical = arg
+                when "--help"
+                        RDoc::usage
+        end
+end
+
+if host == "unknown"
+		puts "No host given"
+		RDoc::usage
+		exit 1;
+end
+
+$log.info "Warning levels at #{$warning}"
+$log.info "Critical levels at #{$critical}"
+
+disks = Disks.new(host)
+
+puts $output
+exit $status
