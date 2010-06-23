@@ -7,6 +7,9 @@
 #		-H Host
 #		-w default warning level in percent
 #		-c default warning level in percent
+#		-C SNMPv2 Community to use for checking
+#		--nocache Don't use the cachefile
+#		--debug Turn on debugging
 #
 
 require "pp"
@@ -14,36 +17,63 @@ require "getoptlong"
 require "rdoc/usage"
 require "logger"
 require "ipaddr"
+require "resolv"
 require "yaml"
 require "fileutils"
+require 'timeout'
 
 # initialize logging engine
-$log = Logger.new(STDOUT)
+$log = Logger.new(STDERR)
 
 ################################## Configuration  ##################################
-#/usr/lib/nagios/plugins/check_nrpe -H localhost -c check_generic -a check_fstab
-$plugin_path = "/usr/lib/nagios/plugins"
-$config_path = "/var/local/check_fstab/config"
-$cache_path = "/var/local/check_fstab/cache"
-# polling intervall in seconds
-$polling_intervall = 5
 
+# Default warning levels at which disks shall be alerted. Can be overriden on the command line
 $warning = "10%"
 $critical = "5%"
 
+# Where will we find check_multi and check_nrpe?
+$plugin_path = "/usr/lib/nagios/plugins"
+
+workdir = "/var/local/check_fstab"
+
+# Check_multi configs will be put here
+$config_path = "#{workdir}/config"
+
+# YAML Cache path
+$cache_path = "#{workdir}/cache"
+
+# polling intervall in seconds e.g. how often will we retrieve updates (default: 60*60 = 1 hour)
+$polling_intervall = 60*60
+
+# Set the Time the plugin should take at maximum (default: 10 seconds)
+$global_timeout = 30
+
+### snmp configuration ###
+$snmpcommunity = ""
+
 ##################################  dont touch this  ##################################
 $status = 0
-$log.level = Logger::DEBUG
+# DEBUG < INFO < WARN < ERROR < FATAL < UNKNOWN
+$log.level = Logger::FATAL
 $output = "ERROR: Unexplained errors happen all the time."
-
+$nocache = false
+# Injects a "-E" into the critical var to circumvent a bug in NRPE.cfg
+$isbuggy = true
 
 ##################################  Classes - no need to touch them  ##################################
 
 class Disks
 		def initialize(ip)
-				# TODO fix error handling
-				@host = ip if IPAddr.new(ip).ipv4? rescue "Error in IP Address"
+				begin
+						@host = ip if IPAddr.new(ip).ipv4?
+				rescue				
+						@host = Resolv.getaddress(ip) 
+						# catch remaining errors
+						# TODO: Resolv does not honor "localhost"
+						error "Error in name resolution for #{@host}" unless IPAddr.new(@host).ipv4?
+				end
 				@olddisks = nil
+				@disks = [{}]
 
 				# go into main loop
 				intelligence
@@ -55,10 +85,16 @@ class Disks
 						retrieve_data_from_host
 				end
 
+				# TODO: If timelimit is reached and nocache = true disks are pulled twice
+				if $nocache == true
+						retrieve_data_from_host
+				end
+
 				# skip if we have manual changes
 				if @disks[0][:changes] == false
+					# TODO: if the last retrieval of disks was empty this one fails.
 					# is data current?
-					difference = Time.now - @disks[1][:seen]
+					difference = Time.now - @disks[1][:last_seen]
 					$log.debug "Last retrieval of disks: #{difference}"
 					if difference >= $polling_intervall
 							$log.info "ohnoes. Data is more than #{$polling_intervall} seconds old. Retrieving update."
@@ -80,22 +116,16 @@ class Disks
 
 		# Calls NRPE and fills @disks with teh list of mounted disks
 		def retrieve_data_from_host
-				data = `#{$plugin_path}/check_nrpe -H #{@host} -c check_fstab`
-				$log.debug "check_nrpe output: #{data.chomp}"
+				disks = nrpe_request
+				return false if disks == false
 
-				# Error handling
-				if data =~ /Command.*not defined/i
-						 error "Error: #{data}"
-				end
-
-				tmpdisks = [{:changes => false}]
-				disks = data.chomp.split("|").map! {|x| x.strip }
+				tmpdisks = [{:changes => false, :provider => @disks[0][:provider]}]
 				disks.each do |disk|
 						tmpdisks << { 
 								:disk => disk,
 								:warn => nil,
 								:crit => nil,
-								:seen => Time.now()
+								:last_seen => Time.now()
 						}
 				end
 				if @disks
@@ -107,6 +137,79 @@ class Disks
 				end
 				write_disk_cache
 				create_multi_config
+		end
+
+		def nrpe_request
+				@nrpe_result = false
+				self.methods.select {|x| x=~ /__nrpe_.*/}.each do |x|
+						$log.debug "Trying #{x} for nrpe data"
+						@nrpe_result = send(x.to_sym)
+						@disks[0][:provider] = x.to_s
+						break unless @nrpe_result == false
+				end
+				if @nrpe_result == false
+						$log.error "Failed to update via nrpe, no methods did succeed."
+						return false
+				end
+				return @nrpe_result
+		end
+
+		# try to get currently mounted partitions via check_fstab
+		def __nrpe_fstab
+				data = call_nrpe "check_fstab"
+				return false if data == false
+				disks = data.chomp.split("|").map! {|x| x.strip }
+				return disks
+		end
+
+		# try to get data from the check_alldisks command.
+		# This one delivers the data from /etc/fstab
+		def __nrpe_alldisks
+				data = call_nrpe "check_alldisks"
+				return false if data == false
+				disks = data.chomp.split("|")[1].split.map! {|x| x = x.split("=")[0] }
+				return disks
+		end
+
+		# this one requires the snmp gem so we need to test for it
+		# TODO: If we pull by SNMP, why do we check by NRPE?
+		def __nrpe_snmp
+				begin
+					gem "snmp"
+				rescue Gem::LoadError
+					$log.debug "No snmp library. skipping."
+					return false
+				end
+				require "snmp"
+
+				disks = []
+				mount_oid = SNMP::ObjectId.new("1.3.6.1.2.1.25.3.8.1.2")
+				begin
+					SNMP::Manager.open(:Host => @host, :Community => $snmpcommunity) do |manager|
+						manager.walk(mount_oid) do |row|
+							row.each { |vb| disks << vb.value.to_s }
+						end
+					end
+				rescue SNMP::RequestTimeout
+						return false
+				end
+				return disks
+		end
+
+		def call_nrpe(command)
+				data = `#{$plugin_path}/check_nrpe -H #{@host} -c #{command}`
+				return false unless nrpe_errors?($?,data)
+				return data
+		end
+
+		# Error handling for nrpe
+		def nrpe_errors?(retcode,data)
+				$log.debug "check_nrpe output: #{data.chomp}"
+				unless retcode == 0
+					puts "Error in NRPE data retrieval. Output was: #{data}" 
+					return false
+				end
+				return true
 		end
 
 		# writes the disk cache file
@@ -139,9 +242,12 @@ class Disks
 						out.puts "# Diskfile for host #{@host} generated at #{Time.now}"
 						@disks.each do |disk|
 								next unless disk[:disk]
-								disk[:warn] = "$WARN$" if disk[:warn].nil?
-								disk[:crit] = "$CRIT$" if disk[:crit].nil?
-								out.puts "command[#{disk[:disk].tr("/","_")}::check_disk]=check_nrpe -H #{@host} -c check_disk -a #{disk[:warn]} #{disk[:crit]} #{disk[:disk]}"
+								warn = disk[:warn]
+								crit = disk[:crit]
+								warn = "$WARN$" if disk[:warn].nil?
+								crit = "$CRIT$" if disk[:crit].nil?
+								out.puts "command[#{disk[:disk].tr("/","_")}::check_disk]=check_nrpe -H #{@host} -c check_disk -a #{warn} '#{crit}	-E' #{disk[:disk]}" if $isbuggy == true
+								out.puts "command[#{disk[:disk].tr("/","_")}::check_disk]=check_nrpe -H #{@host} -c check_disk -a #{warn} #{crit} #{disk[:disk]}" if $isbuggy == false
 						end
 				end
 				$log.info "check_multi config written for host #{@host}"
@@ -188,7 +294,8 @@ class Disks
 
 		def error(message)
 				$log.error "#{message}"
-				exit 1;
+				puts message
+				exit 3;
 		end
 end
 
@@ -199,6 +306,9 @@ opts = GetoptLong.new(
         ["--host", "-H", GetoptLong::REQUIRED_ARGUMENT],
         ["--warning", "-w", GetoptLong::OPTIONAL_ARGUMENT],
         ["--critical", "-c", GetoptLong::OPTIONAL_ARGUMENT],
+        ["--community", "-C", GetoptLong::OPTIONAL_ARGUMENT],
+        ["--nocache", "-n", GetoptLong::NO_ARGUMENT],
+        ["--debug", "-d", GetoptLong::NO_ARGUMENT],
         ["--help", "-h", GetoptLong::NO_ARGUMENT ]
 )
 
@@ -212,6 +322,12 @@ opts.each do |opt,arg|
 						$warning = arg
 				when "--critical"
 						$critical = arg
+				when "--nocache"
+						$nocache = true
+				when "--community"
+						$snmpcommunity = arg
+				when "--debug"
+						$log.level = Logger::DEBUG
                 when "--help"
                         RDoc::usage
         end
@@ -220,13 +336,21 @@ end
 if host == "unknown"
 		puts "No host given"
 		RDoc::usage
-		exit 1;
+		exit 3;
 end
 
 $log.info "Warning levels at #{$warning}"
 $log.info "Critical levels at #{$critical}"
 
-disks = Disks.new(host)
+begin
+		# Best practice suggest not to take more than 10 seconds to run
+	Timeout::timeout($global_timeout) {
+		disks = Disks.new(host)
+	}
+rescue Timeout::Error
+		puts "Timeout while getting data from #{host}"
+		exit 3
+end
 
 puts $output
 exit $status
