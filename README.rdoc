@@ -1,0 +1,47 @@
+This plugin is built to retrieve data of the currently mounted partition (or the content of /etc/fstab) and check each of the disks separately. 
+The following features are available:
+* Define Warning and Critical Levels for each disk separately
+* Detection if a disk has not been mounted (e.g. after a restart and someone forgot to add it to /etc/fstab)
+* different pulling methods for list retrieval (NRPE, SNMP)
+
+=== Prerequisites
+* NRPE must have been built with the --enable-arguments flag (the standard distros already have that done for you)
+* dont_blame_nrpe = 1 has to be set in nrpe.cfg
+* of course you need ruby installed on your Nagios machine
+* Optional you can install the snmp gem via "gem install snmp"
+
+=== How to use it
+* Step 1:
+Edit nrpe.cfg and add a line at the bottom:
+	command[check_fstab]=/usr/lib/nagios/plugins/check_fstab_agent
+or add this line:
+	command[check_alldisks]=/usr/lib/nagios/plugins/check_disk -w $ARG1$ -c $ARG2$ -e -E `cat /etc/fstab | egrep -v "^#|^$|noauto|tmpfs|    sysfs|devpts|proc|swap|iso9660|cifs|nfs" | awk '{printf "-p %s ", $2}'`
+
+Of course you can have both of them if you are not sure. The first one will give the plugin a list of currently mounted disks. This is usually the better choice as it will make use of the missing disks feature. 
+The second one is self contained and will use the /etc/fstab to get its data. The advantage is that you won't have to copy another plugin to your servers.
+
+* Step 2:
+copy check_fstab into your nagios-plugins directory (for example on debian this would /usr/lib/nagios/plugins ).
+If you chose the first command now is a good time to copy the check_fstab_agent to your servers plugin directory.
+
+* Step 3:
+Edit check_fstab's configuration section to suit your needs. Especially the default values for warning and critical and the paths for the cache. Also create those directories and chown them to the nagios user:
+	mkdir -p /var/local/check_fstab/cache
+	mkdir /var/local/check_fstab/config
+	chown -R nagios:nagios /var/local/check_fstab
+
+* Step 4:
+define a command and add a service in your Nagios Configuration:
+	define command {
+	     command_name       check_fstab
+	     command_line       $USER1$/check_fstab -H $HOSTADDRESS$ -w $ARG1$ -c $ARG2$
+	}
+
+	define service {
+	    use                      default-service-template
+	    host_name                *
+	    service_description      Disks
+	    check_command            check_fstab
+	}
+
+If everything went well you should see the first results in Nagios.

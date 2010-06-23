@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="iso-8859-1"?>
+<!DOCTYPE html 
+     PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+     "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html>
+<head>
+  <title>intelligence (Disks)</title>
+  <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1" />
+  <link rel="stylesheet" href="../.././rdoc-style.css" type="text/css" media="screen" />
+</head>
+<body class="standalone-code">
+  <pre><span class="ruby-comment cmt"># File check_fstab, line 82</span>
+                <span class="ruby-keyword kw">def</span> <span class="ruby-identifier">intelligence</span>
+                                <span class="ruby-keyword kw">unless</span> <span class="ruby-identifier">read_disk_cache</span>
+                                                <span class="ruby-identifier">$log</span>.<span class="ruby-identifier">debug</span> <span class="ruby-value str">&quot;yikes. something went wrong while reading cache file. get fresh data.&quot;</span>
+                                                <span class="ruby-identifier">retrieve_data_from_host</span>
+                                <span class="ruby-keyword kw">end</span>
+
+                                <span class="ruby-comment cmt"># TODO: If timelimit is reached and nocache = true disks are pulled twice</span>
+                                <span class="ruby-keyword kw">if</span> <span class="ruby-identifier">$nocache</span> <span class="ruby-operator">==</span> <span class="ruby-keyword kw">true</span>
+                                                <span class="ruby-identifier">retrieve_data_from_host</span>
+                                <span class="ruby-keyword kw">end</span>
+
+                                <span class="ruby-comment cmt"># skip if we have manual changes</span>
+                                <span class="ruby-keyword kw">if</span> <span class="ruby-ivar">@disks</span>[<span class="ruby-value">0</span>][<span class="ruby-identifier">:changes</span>] <span class="ruby-operator">==</span> <span class="ruby-keyword kw">false</span>
+                                        <span class="ruby-comment cmt"># TODO: if the last retrieval of disks was empty this one fails.</span>
+                                        <span class="ruby-comment cmt"># is data current?</span>
+                                        <span class="ruby-identifier">difference</span> = <span class="ruby-constant">Time</span>.<span class="ruby-identifier">now</span> <span class="ruby-operator">-</span> <span class="ruby-ivar">@disks</span>[<span class="ruby-value">1</span>][<span class="ruby-identifier">:last_seen</span>]
+                                        <span class="ruby-identifier">$log</span>.<span class="ruby-identifier">debug</span> <span class="ruby-node">&quot;Last retrieval of disks: #{difference}&quot;</span>
+                                        <span class="ruby-keyword kw">if</span> <span class="ruby-identifier">difference</span> <span class="ruby-operator">&gt;=</span> <span class="ruby-identifier">$polling_intervall</span>
+                                                        <span class="ruby-identifier">$log</span>.<span class="ruby-identifier">info</span> <span class="ruby-node">&quot;ohnoes. Data is more than #{$polling_intervall} seconds old. Retrieving update.&quot;</span>
+                                                        <span class="ruby-identifier">retrieve_data_from_host</span>
+                                        <span class="ruby-keyword kw">end</span>
+                                <span class="ruby-keyword kw">end</span>
+                                <span class="ruby-comment cmt"># ok by now we should have @disks initialized. just to be sure.</span>
+                                <span class="ruby-identifier">error</span> <span class="ruby-value str">&quot;Sumthing happened while initializing @disks. Plz check.&quot;</span> <span class="ruby-keyword kw">unless</span> <span class="ruby-ivar">@disks</span>
+
+                                <span class="ruby-comment cmt"># did we have changes?</span>
+                                <span class="ruby-comment cmt"># if we had changes we must recreate the check_multi config</span>
+                                <span class="ruby-keyword kw">if</span> <span class="ruby-identifier">check_for_changes</span>
+                                                <span class="ruby-identifier">create_multi_config</span>
+                                <span class="ruby-keyword kw">end</span>
+
+                                <span class="ruby-comment cmt"># call check_multi</span>
+                                <span class="ruby-identifier">$output</span> = <span class="ruby-identifier">call_check_multi</span>                          
+                <span class="ruby-keyword kw">end</span></pre>
+</body>
+</html>

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="iso-8859-1"?>
+<!DOCTYPE html 
+     PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+     "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html>
+<head>
+  <title>write_disk_cache (Disks)</title>
+  <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1" />
+  <link rel="stylesheet" href="../.././rdoc-style.css" type="text/css" media="screen" />
+</head>
+<body class="standalone-code">
+  <pre><span class="ruby-comment cmt"># File check_fstab, line 216</span>
+                <span class="ruby-keyword kw">def</span> <span class="ruby-identifier">write_disk_cache</span>
+                                <span class="ruby-keyword kw">if</span> <span class="ruby-constant">File</span>.<span class="ruby-identifier">exists?</span>(<span class="ruby-node">&quot;#{$cache_path}/#{@host}_disks.yaml&quot;</span>)
+                                                <span class="ruby-identifier">$log</span>.<span class="ruby-identifier">info</span> <span class="ruby-node">&quot;Doing backup of cachefile to #{@host}_disks.yaml&quot;</span>
+                                                <span class="ruby-constant">FileUtils</span>.<span class="ruby-identifier">mv</span>(<span class="ruby-node">&quot;#{$cache_path}/#{@host}_disks.yaml&quot;</span>,<span class="ruby-node">&quot;#{$cache_path}/#{@host}_disks_backup.yaml&quot;</span>)
+                                                <span class="ruby-ivar">@olddisks</span> = <span class="ruby-constant">YAML</span><span class="ruby-operator">::</span><span class="ruby-identifier">load</span>(<span class="ruby-constant">File</span>.<span class="ruby-identifier">read</span>(<span class="ruby-node">&quot;#{$cache_path}/#{@host}_disks_backup.yaml&quot;</span>))
+                                <span class="ruby-keyword kw">end</span>
+                                <span class="ruby-constant">File</span>.<span class="ruby-identifier">open</span>( <span class="ruby-node">&quot;#{$cache_path}/#{@host}_disks.yaml&quot;</span>, <span class="ruby-value str">'w'</span> ) <span class="ruby-keyword kw">do</span> <span class="ruby-operator">|</span><span class="ruby-identifier">out</span><span class="ruby-operator">|</span>
+                                                <span class="ruby-constant">YAML</span>.<span class="ruby-identifier">dump</span>(<span class="ruby-ivar">@disks</span>,<span class="ruby-identifier">out</span>)
+                                <span class="ruby-keyword kw">end</span>
+                                <span class="ruby-identifier">$log</span>.<span class="ruby-identifier">info</span> <span class="ruby-node">&quot;Disk cache written for #{@host}&quot;</span>
+                <span class="ruby-keyword kw">end</span></pre>
+</body>
+</html>
