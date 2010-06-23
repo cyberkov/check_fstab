@@ -46,7 +46,7 @@ $cache_path = "#{workdir}/cache"
 $polling_intervall = 60*60
 
 # Set the Time the plugin should take at maximum (default: 10 seconds)
-$global_timeout = 30
+$global_timeout = 10
 
 ### snmp configuration ###
 $snmpcommunity = ""
@@ -159,6 +159,7 @@ class Disks
 				data = call_nrpe "check_fstab"
 				return false if data == false
 				disks = data.chomp.split("|").map! {|x| x.strip }
+				disks.delete("$") if disks.include?("$")
 				return disks
 		end
 
@@ -206,7 +207,7 @@ class Disks
 		def nrpe_errors?(retcode,data)
 				$log.debug "check_nrpe output: #{data.chomp}"
 				unless retcode == 0
-					puts "Error in NRPE data retrieval. Output was: #{data}" 
+					$log.warn "Error in NRPE data retrieval. Output was: #{data}" 
 					return false
 				end
 				return true
