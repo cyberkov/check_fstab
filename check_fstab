@@ -267,7 +267,8 @@ class Disks
 				data = `#{$plugin_path}/check_multi -s libexec=#{$plugin_path} -s WARN=#{$warning} -s CRIT=#{$critical} #{$multi_opts} -t 20 -f #{$config_path}/#{@host}_disks.cfg`
 				$status = $? >> 8
 				$log.debug "return code of check_multi was #{$status}"
-				return data
+				return data.return data.gsub("\n", "<br />") if $html == true
+				return data if $html == false
 		end
 
 		# does the data differ from what we already know?
