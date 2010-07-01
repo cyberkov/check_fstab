@@ -52,6 +52,9 @@ $global_timeout = 10
 ### snmp configuration ###
 $snmpcommunity = ""
 
+# enable HTML output?
+$html = true
+
 ##################################  dont touch this  ##################################
 $status = 0
 # DEBUG < INFO < WARN < ERROR < FATAL < UNKNOWN
@@ -61,6 +64,8 @@ $nocache = false
 $ssl = ""
 # Injects a "-E" into the critical var to circumvent a bug in NRPE.cfg
 $isbuggy = true
+$multi_opts = "-r 15" if $html == true
+$multi_opts = "-r 12" if $html == false
 
 ##################################  Classes - no need to touch them  ##################################
 
@@ -258,8 +263,8 @@ class Disks
 
 		# executes check_multi for the given host
 		def call_check_multi
-				$log.debug "calling: #{$plugin_path}/check_multi -s libexec=#{$plugin_path} -s WARN=#{$warning} -s CRIT=#{$critical} -t 20 -f #{$config_path}/#{@host}_disks.cfg"
-				data = `#{$plugin_path}/check_multi -s libexec=#{$plugin_path} -s WARN=#{$warning} -s CRIT=#{$critical} -t 20 -f #{$config_path}/#{@host}_disks.cfg`
+				$log.debug "calling: #{$plugin_path}/check_multi -s libexec=#{$plugin_path} -s WARN=#{$warning} -s CRIT=#{$critical} #{$multi_opts} -t 20 -f #{$config_path}/#{@host}_disks.cfg"
+				data = `#{$plugin_path}/check_multi -s libexec=#{$plugin_path} -s WARN=#{$warning} -s CRIT=#{$critical} #{$multi_opts} -t 20 -f #{$config_path}/#{@host}_disks.cfg`
 				$status = $? >> 8
 				$log.debug "return code of check_multi was #{$status}"
 				return data
