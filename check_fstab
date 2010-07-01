@@ -64,7 +64,7 @@ $nocache = false
 $ssl = ""
 # Injects a "-E" into the critical var to circumvent a bug in NRPE.cfg
 $isbuggy = true
-$multi_opts = "-r 15" if $html == true
+$multi_opts = "-r 15 -s collapse=0" if $html == true
 $multi_opts = "-r 12" if $html == false
 
 ##################################  Classes - no need to touch them  ##################################
@@ -267,7 +267,7 @@ class Disks
 				data = `#{$plugin_path}/check_multi -s libexec=#{$plugin_path} -s WARN=#{$warning} -s CRIT=#{$critical} #{$multi_opts} -t 20 -f #{$config_path}/#{@host}_disks.cfg`
 				$status = $? >> 8
 				$log.debug "return code of check_multi was #{$status}"
-				return data.return data.gsub("\n", "<br />") if $html == true
+				return data.gsub("\n", "<br />") if $html == true
 				return data if $html == false
 		end
 
